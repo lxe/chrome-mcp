@@ -8,16 +8,17 @@
     "dev": "bun --watch src/server.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.8.0",
     "chrome-remote-interface": "^0.33.3",
     "cors": "^2.8.5",
     "diff": "^7.0.0",
-    "express": "^5.0.1",
+    "express": "^4.21.2",
     "uuid": "^11.1.0"
   },
   "devDependencies": {
     "@types/chrome-remote-interface": "^0.31.14",
     "@types/cors": "^2.8.17",
-    "@types/diff": "^7.0.1",
+    "@types/diff": "^7.0.2",
     "@types/express": "^5.0.1",
     "@types/uuid": "^10.0.0"
   }
