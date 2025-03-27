@@ -138,12 +138,38 @@ export class ChromeInterface {
   }
 
   /**
-   * Simulates a mouse click at specified coordinates
+   * Simulates a mouse click at specified coordinates with verification
    */
   async click(x: number, y: number) {
     if (!this.client) throw new Error('Chrome not connected');
-    const { Input } = this.client;
+    const { Input, Runtime } = this.client;
 
+    // Get element info before clicking
+    const preClickInfo = await Runtime.evaluate({
+      expression: `
+        (function() {
+          const element = document.elementFromPoint(${x}, ${y});
+          return element ? {
+            tagName: element.tagName,
+            href: element instanceof HTMLAnchorElement ? element.href : null,
+            type: element instanceof HTMLInputElement ? element.type : null,
+            isInteractive: (
+              element instanceof HTMLButtonElement || 
+              element instanceof HTMLAnchorElement ||
+              element instanceof HTMLInputElement ||
+              element.hasAttribute('role') ||
+              window.getComputedStyle(element).cursor === 'pointer'
+            )
+          } : null;
+        })()
+      `,
+      returnByValue: true
+    });
+
+    const elementInfo = preClickInfo.result.value;
+    console.log('[Click] Clicking element:', elementInfo);
+
+    // Dispatch a complete mouse event sequence
     const dispatchMouseEvent = async (options: MouseEventOptions) => {
       await Input.dispatchMouseEvent({
         ...options,
@@ -153,11 +179,61 @@ export class ChromeInterface {
       });
     };
 
-    // Natural mouse movement sequence
+    // Natural mouse movement sequence with hover first
     await dispatchMouseEvent({ type: 'mouseMoved', x: x - 50, y: y - 50 });
+    await new Promise(resolve => setTimeout(resolve, 50)); // Small delay for hover
     await dispatchMouseEvent({ type: 'mouseMoved', x, y });
+    await new Promise(resolve => setTimeout(resolve, 50)); // Small delay for hover effect
+
+    // Click sequence
     await dispatchMouseEvent({ type: 'mousePressed', x, y });
+    await new Promise(resolve => setTimeout(resolve, 50)); // Small delay between press and release
     await dispatchMouseEvent({ type: 'mouseReleased', x, y, buttons: 0 });
+
+    // Verify the click had an effect and show visual feedback
+    await Runtime.evaluate({
+      expression: `
+        (function() {
+          const element = document.elementFromPoint(${x}, ${y});
+          if (element) {
+            // Add a brief flash to show where we clicked
+            const div = document.createElement('div');
+            div.style.position = 'fixed';
+            div.style.left = '${x}px';
+            div.style.top = '${y}px';
+            div.style.width = '20px';
+            div.style.height = '20px';
+            div.style.backgroundColor = 'rgba(255, 255, 0, 0.5)';
+            div.style.borderRadius = '50%';
+            div.style.pointerEvents = 'none';
+            div.style.zIndex = '999999';
+            div.style.transition = 'all 0.3s ease-out';
+            document.body.appendChild(div);
+            
+            // Animate the feedback
+            setTimeout(() => {
+              div.style.transform = 'scale(1.5)';
+              div.style.opacity = '0';
+              setTimeout(() => div.remove(), 300);
+            }, 50);
+
+            // For links, verify navigation started
+            if (element instanceof HTMLAnchorElement) {
+              element.dispatchEvent(new MouseEvent('click', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+              }));
+            }
+          }
+        })()
+      `
+    });
+
+    // Additional delay for link clicks to start navigation
+    if (elementInfo?.href) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
   }
 
   /**
@@ -228,7 +304,7 @@ export class ChromeInterface {
             setTimeout(() => {
               element.focus();
               resolve(true);
-            }, 300);
+            }, 1000);
           });
         })()
       `,
@@ -251,8 +327,8 @@ export class ChromeInterface {
     if (!this.client) throw new Error('Chrome not connected');
     const { Runtime } = this.client;
 
-    // Get coordinates and scroll element into view
-    const { result } = await Runtime.evaluate({
+    // Get element info and coordinates
+    const elementInfo = await Runtime.evaluate({
       expression: `
         (function() {
           const element = window.interactiveElements[${index}];
@@ -261,16 +337,19 @@ export class ChromeInterface {
           // Scroll into view with smooth behavior
           element.scrollIntoView({ behavior: 'smooth', block: 'center' });
           
-          // Wait a bit for scroll to complete
           return new Promise(resolve => {
             setTimeout(() => {
               const rect = element.getBoundingClientRect();
               resolve({
-                // Click in the center of the left quarter of the element
-                x: Math.round(rect.left + (rect.width * 0.125)), // Center of left quarter (1/8 of total width)
-                y: Math.round(rect.top + (rect.height * 0.5))   // Vertical center
+                rect: {
+                  x: Math.round(rect.left + (rect.width * 0.5)), // Click in center
+                  y: Math.round(rect.top + (rect.height * 0.5))
+                },
+                tagName: element.tagName,
+                href: element instanceof HTMLAnchorElement ? element.href : null,
+                type: element instanceof HTMLInputElement ? element.type : null
               });
-            }, 300);
+            }, 1000); // Wait for scroll
           });
         })()
       `,
@@ -278,20 +357,27 @@ export class ChromeInterface {
       returnByValue: true
     });
 
-    if (result.subtype === 'error') {
-      throw new Error(result.description);
+    if (elementInfo.result.subtype === 'error') {
+      throw new Error(elementInfo.result.description);
     }
 
-    const { x, y } = result.value;
+    const { x, y } = elementInfo.result.value.rect;
 
     // Highlight the element before clicking
     await this.highlightElement(`window.interactiveElements[${index}]`);
     
     // Add a small delay to make the highlight visible
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 300));
 
-    // Perform the click
+    // Perform the physical click
     await this.click(x, y);
+
+    // For inputs, ensure they're focused after click
+    if (elementInfo.result.value.type) {
+      await Runtime.evaluate({
+        expression: `window.interactiveElements[${index}].focus()`
+      });
+    }
   }
 
   /**
